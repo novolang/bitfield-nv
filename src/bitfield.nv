@@ -1,0 +1,345 @@
+// bitfield — the names on top of the arithmetic: a field with a label
+// and an enumeration of its values, a register as a list of those, and
+// the printing, parsing and validation a person needs.
+//
+// Every body is a `todo()`.  The signatures are the design, and the
+// compiler checks them as claims; see the README for the stamp.
+//
+// WHY THERE IS A FOURTH MODULE.  `bfflags`, `bffield` and `bfreg` speak
+// `Int` and the four unsigned widths, and they build for a Cortex-M.
+// This one speaks `Str` and lists, and neither links at
+// `@tier(embedded)`: the embedded runtime defines no `novo_str_*`
+// symbol, so a device that called one would fail at the linker rather
+// than at the type checker.  One host-only function anywhere in a
+// compilation unit is an undefined symbol on a device whether or not
+// the firmware calls it, so the names live here and the arithmetic
+// lives there.
+//
+// WHAT THE NAMES BUY.  A description is the thing a register-map
+// generator emits and a debugger reads: `format_reg` turns a word a
+// probe read into `CONFIG { HWFC: 1, PARITY: Excluded(0), STOP: 1 }`,
+// and `validate` catches the description that has two fields on the
+// same bit before anything is ever written with it.  The device never
+// sees any of it.
+//
+// THE DESCRIPTIONS ARE BOXED STRUCTS, not `@value` ones, and
+// deliberately: they own `Str`s and lists, which is exactly what a
+// `@value` may not hold.  They are built once at start-up on a host and
+// read for the life of the program.
+
+// A name for one value of a field.
+//
+// The enumeration a datasheet prints beside a multi-bit field: `PARITY`
+// is not "the number 7", it is `Included`.  A field with no enumeration
+// carries an empty list and prints its value as a number.
+pub struct BfValueName
+    value: Int
+    name: Str
+
+// A field with a label and, when the datasheet gives one, the names of
+// its values.
+//
+// The three numbers are spelled out here rather than held as a
+// `BfField`: this struct owns a `Str` and a list, so it is boxed, and a
+// boxed aggregate stores pointer-shaped slots that an unboxed `@value`
+// has no lowering for.  `desc_field` rebuilds the `BfField` from them,
+// which is the one call that crosses from the names to the arithmetic.
+pub struct BfFieldDesc
+    name: Str
+    offset: Int
+    width: Int
+    signed: Bool
+    values: [BfValueName]
+
+// A register: its name, its width, the value it holds after reset, and
+// the fields that make it up.
+//
+// This is the "list of fields" the plan's row asks for, and it is here
+// rather than in `bfreg` because a `@value` struct may not own a list.
+// `reset` is the datasheet's reset value, which is what `is_reset` and
+// `format_changes` compare against — a register that reads its reset
+// value is one nobody has configured.
+pub struct BfRegDesc
+    name: Str
+    width: Int
+    reset: Int
+    fields: [BfFieldDesc]
+
+// The names of the bits of a flag word, lowest first.
+//
+// Position `i` names bit `i`; an empty string means the bit has no name
+// and prints as its index.  A table shorter than the word is not an
+// error — the bits past its end print as indices, which is what a
+// partially documented status register needs.
+pub struct BfFlagNames
+    width: Int
+    names: [Str]
+
+// What is wrong with a description, or with a value being written into
+// one.
+//
+// The variants are prefixed because a variant is constructed by name
+// across the whole assembly, and `Overlap` and `OutOfRange` are names
+// every package wants.
+pub enum BfError
+    // Two fields of one register claim the same bit.
+    //
+    // The mistake this package exists to catch: a hand-written driver
+    // with an off-by-one offset writes one field and silently clobbers
+    // another, and nothing fails until a peripheral misbehaves months
+    // later.  Both field names are here, and the bit they collide on.
+    BfFieldsOverlap(first: Str, second: Str, at: Int)
+    // A field reaches past the register's width.
+    //
+    // `end` is `offset + width` and `word_width` is the register's, so
+    // the report says by how much.
+    BfFieldPastEnd(name: Str, end: Int, word_width: Int)
+    // A value does not fit the field it was to be written into.
+    //
+    // `lo` and `hi` are `bffield.field_min` and `bffield.field_max`, so
+    // a caller can print the range rather than the width and leave the
+    // reader to work it out.
+    BfValueOutOfRange(name: Str, value: Int, lo: Int, hi: Int)
+    // A register description was handed a different number of values
+    // than it has fields.
+    BfFieldCountMismatch(want: Int, got: Int)
+    // A flag name in a parsed string is in no table.
+    //
+    // `at` is the byte offset of the name in the input, so a caller can
+    // point at it.
+    BfUnknownFlag(name: Str, at: Int)
+    // A width outside 1 through 64.
+    BfBadWidth(width: Int)
+
+// The standard `Error` implementation, so a bad description can be
+// reported by anything that reports errors.
+impl Error for BfError
+    // Answer the one-line report: what was wrong, and which field it
+    // was wrong about.  The field NAME leads, because a person holding
+    // a datasheet finds a field by name and a bit offset only after
+    // counting.
+    fn message(self) -> Str
+        todo("bitfield.BfError.message")
+
+// ── Building descriptions ───────────────────────────────────────────
+
+// A named value of a field.
+//
+// ```novo
+// use bitfield
+//
+// fn main() [io]
+//     println(bitfield.value_name(7, "Included").name)   // Included
+// ```
+pub fn value_name(value: Int, name: Str) -> BfValueName
+    todo("bitfield.value_name")
+
+// A field with a name and no enumeration.
+//
+// The common case: a width, an enable, a pin number.  `enum_desc` is
+// for the fields whose values have names.
+pub fn field_desc(name: Str, f: BfField) -> BfFieldDesc
+    todo("bitfield.field_desc")
+
+// A field with a name and an enumeration of its values.
+//
+// Values not in the list are not an error — they print as numbers,
+// because a reserved encoding is a real thing a register can hold and a
+// description that refused it could not report what the register said.
+pub fn enum_desc(name: Str, f: BfField, values: [BfValueName]) -> BfFieldDesc
+    todo("bitfield.enum_desc")
+
+// The description's field, as the arithmetic modules take it.
+//
+// The one call that crosses from the names back to the numbers: a
+// caller holding a `BfFieldDesc` and wanting `bfreg.with` asks for this
+// and gets the `@value` the device half speaks.
+//
+// ```novo
+// use bffield
+// use bitfield
+//
+// fn main() [io]
+//     let fd = bitfield.field_desc("PARITY", bffield.field(1, 3))
+//     println("${bitfield.desc_field(fd).width}")   // 3
+// ```
+pub fn desc_field(fd: BfFieldDesc) -> BfField
+    todo("bitfield.desc_field")
+
+// A register description.
+//
+// Not validated here: `validate` is a separate call because building a
+// description is what a generator does and checking it is what a test
+// does, and a constructor that refused would have to answer a `Result`
+// at every line of a generated file.
+pub fn reg_desc(name: Str, width: Int, reset: Int, fields: [BfFieldDesc]) -> BfRegDesc
+    todo("bitfield.reg_desc")
+
+// A table of flag-bit names, lowest bit first.
+pub fn flag_names(width: Int, names: [Str]) -> BfFlagNames
+    todo("bitfield.flag_names")
+
+// ── Checking a description ──────────────────────────────────────────
+
+// Check that every field fits the register and that no two overlap.
+//
+// The call a package's own test makes over every description it ships,
+// and the one that turns "the driver has been writing the wrong bits
+// since March" into a failing assertion.  Answers the number of bits
+// the fields cover, so a caller that wants to know how much of the
+// register is described gets it from the same pass.
+//
+// Fields are reported in declaration order, and the FIRST fault stops
+// the check — a description with two problems is a description to fix
+// once and re-run.
+//
+// ```novo
+// use bffield
+// use bitfield
+//
+// fn main() [io]
+//     let d = bitfield.reg_desc("CONFIG", 32, 0, [
+//         bitfield.field_desc("HWFC", bffield.field(0, 1)),
+//         bitfield.field_desc("PARITY", bffield.field(1, 3))])
+//     match bitfield.validate(d)
+//         Ok(n)  => println("${n}")   // 4
+//         Err(e) => println(e.message())
+// ```
+pub fn validate(d: BfRegDesc) -> Result<Int, BfError>
+    todo("bitfield.validate")
+
+// The union of every field's mask.
+//
+// What `bfreg.residue` is given to find the bits a description does not
+// explain.  Computed without validating, so a description with an
+// overlap still answers — the two are separate questions.
+pub fn covered_mask(d: BfRegDesc) -> Int
+    todo("bitfield.covered_mask")
+
+// ── Reading and writing a word by description ───────────────────────
+
+// Every field's value, in the description's order.
+//
+// The whole register decoded in one call, which is what a debugger, a
+// register dump and a conformance test all want.
+pub fn read_all(d: BfRegDesc, word: Int) -> [Int]
+    todo("bitfield.read_all")
+
+// A word built from one value per field, in the description's order.
+//
+// `BfFieldCountMismatch` when the list is the wrong length, and
+// `BfValueOutOfRange` naming the first field whose value does not fit —
+// this is the call that CHECKS, where `bfreg.with` masks.  Bits no
+// field covers come from `base`, so a caller preserving reserved bits
+// passes the word it read.
+//
+// ```novo
+// use bffield
+// use bitfield
+//
+// fn main() [io]
+//     let d = bitfield.reg_desc("CONFIG", 32, 0, [
+//         bitfield.field_desc("HWFC", bffield.field(0, 1)),
+//         bitfield.field_desc("PARITY", bffield.field(1, 3))])
+//     match bitfield.write_all(d, 0, [1, 7])
+//         Ok(w)  => println("${w}")   // 15
+//         Err(e) => println(e.message())
+// ```
+pub fn write_all(d: BfRegDesc, base: Int, values: [Int]) -> Result<Int, BfError>
+    todo("bitfield.write_all")
+
+// One field's value out of a word, by name.
+//
+// `BfUnknownFlag` when no field has that name — the same variant,
+// because "you named something that is not in this table" is one
+// mistake whether the table is fields or flags.
+pub fn read_named(d: BfRegDesc, word: Int, name: Str) -> Result<Int, BfError>
+    todo("bitfield.read_named")
+
+// A word with one named field replaced, checked against its range.
+pub fn write_named(d: BfRegDesc, word: Int, name: Str, v: Int) -> Result<Int, BfError>
+    todo("bitfield.write_named")
+
+// True when `word` is the description's reset value.
+pub fn is_reset(d: BfRegDesc, word: Int) -> Bool
+    todo("bitfield.is_reset")
+
+// ── Printing ────────────────────────────────────────────────────────
+
+// The register as one line: `CONFIG { HWFC: 1, PARITY: Included(7) }`.
+//
+// A field with an enumeration prints the name and the number, in that
+// order and both — the name is what a person reads and the number is
+// what they will type into a probe.  A field with no name for its value
+// prints the number alone.
+//
+// ```novo
+// use bffield
+// use bitfield
+//
+// fn main() [io]
+//     let d = bitfield.reg_desc("ENABLE", 32, 0, [
+//         bitfield.enum_desc("EN", bffield.field(0, 4),
+//                            [bitfield.value_name(0, "Disabled"),
+//                             bitfield.value_name(4, "Enabled")])])
+//     println(bitfield.format_reg(d, 4))
+//     // ENABLE { EN: Enabled(4) }
+// ```
+pub fn format_reg(d: BfRegDesc, word: Int) -> Str
+    todo("bitfield.format_reg")
+
+// One field of a word: `HWFC: 1`, or `EN: Enabled(4)`.
+pub fn format_field(fd: BfFieldDesc, word: Int) -> Str
+    todo("bitfield.format_field")
+
+// Only the fields whose value differs from the reset value's.
+//
+// `ENABLE { EN: Enabled(4) }` where `format_reg` would have printed
+// nine fields, eight of them still at reset.  What a start-up log wants
+// and what a register dump of a whole peripheral becomes readable as.
+pub fn format_changes(d: BfRegDesc, word: Int) -> Str
+    todo("bitfield.format_changes")
+
+// A flag set as its names: `RXDRDY | TXDRDY | 0x40`.
+//
+// A set bit with no name in the table prints as a hex mask, so nothing
+// is lost — a status word with an undocumented bit set is exactly the
+// case a person is staring at the output for.  The empty set prints as
+// `(none)` rather than as an empty string, because an empty line in a
+// log says nothing.
+//
+// ```novo
+// use bfflags
+// use bitfield
+//
+// fn main() [io]
+//     let t = bitfield.flag_names(8, ["RXDRDY", "TXDRDY", "ERROR"])
+//     println(bitfield.format_flags(t, bfflags.of(8, 5)))
+//     // RXDRDY | ERROR
+// ```
+pub fn format_flags(t: BfFlagNames, f: BfFlags) -> Str
+    todo("bitfield.format_flags")
+
+// The flag set a `|`-separated list of names spells.
+//
+// The other direction, for a configuration file or a command line:
+// `"RXDRDY | ERROR"` back to the word.  Names are trimmed, matched
+// case-sensitively against the table, and a `0x`-prefixed number is
+// accepted as a raw mask — the mirror of what `format_flags` prints for
+// a bit it could not name, so the two round-trip.
+//
+// `BfUnknownFlag` names the first name that is in no table and the byte
+// offset it started at.
+//
+// The answer is the BITS, masked to the table's width, and not a
+// `BfFlags`: a `@value` struct may not be a `Result` payload, so the
+// value that can fail comes back as the integer it wraps and
+// `bfflags.of(t.width, bits)` is the one line that makes it a set
+// again.
+pub fn parse_flags(t: BfFlagNames, s: Str) -> Result<Int, BfError>
+    todo("bitfield.parse_flags")
+
+// The name of bit `i`, or an empty string when the table does not name
+// it.
+pub fn flag_name(t: BfFlagNames, i: Int) -> Str
+    todo("bitfield.flag_name")

@@ -1,0 +1,39 @@
+[package]
+name        = "bitfield-nv"
+version     = "0.0.1"
+description = "Register fields as @value types: a flag set that knows how wide its word is, a field described once as offset, width and signedness and then read and written by that description, and a register as read-modify-write arithmetic on a word.  The MMIO read and write stay in the HAL.  Interface only — every body is a todo()."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`: shifts and masks over words the caller already holds.  No
+# function declares an effect, and nothing here knows an address — a
+# register's value is a value, and the two memory accesses that make it
+# a register stay in `hal`.
+#
+# It carries `tests/embedded_probe.nv`, so the device claim is BUILT.
+# The claim is the package's whole argument: a driver that cannot use
+# this on a Cortex-M would go back to writing shifts by hand.
+layer       = "core"
+
+category    = "embedded"
+
+tags        = ["bitflags", "bitfield", "register", "mmio", "embedded", "no-alloc", "sans-io"]
+repository  = "https://github.com/novolang/bitfield-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.8.9"
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "Register fields, described once"
+
+[dependencies]
+# None.  The arithmetic is `std.bits` and the language; a package that
+# needed a dependency to shift a word left would be the wrong package.

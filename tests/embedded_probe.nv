@@ -1,0 +1,123 @@
+// tests/embedded_probe.nv — the package's device claim, as a program
+// that either builds for a Cortex-M or does not.
+//
+// The shard audit's `core-embedded` row copies this and the modules its
+// `use` lines reach into a package of its own and runs
+//
+//   novo build --target=nrf52-qemu src/probe.nv
+//
+// which produces a real Cortex-M4 ELF or fails.  For this package the
+// claim is the entire argument: a driver that had to leave the device
+// to describe a register would go back to writing shifts by hand, and
+// there would be nothing here worth depending on.
+//
+// It BUILDS; it does not run.  Every function it calls is a `todo()`
+// today, so a device that executed this would panic on the first line
+// of `main`.  What is being checked is the tier: `--target=nrf52-qemu`
+// stamps `@tier(embedded)` on every function it compiles, so the
+// checker walks the module and refuses a `Str` concatenation, a list
+// literal or an unbounded `while` wherever the implementation later
+// puts one.
+//
+// `bitfield` IS NOT USED HERE, and that is the split rather than a
+// convenience: that module speaks `Str` and lists, the embedded runtime
+// defines neither, and one host-only function anywhere in a compilation
+// unit is an undefined symbol at embedded link time whether or not the
+// firmware calls it.
+
+use bfflags
+use bffield
+use bfreg
+
+fn main() [hw]
+    // The flag algebra, over an 8-bit status word — what an interrupt
+    // dispatcher does between two reads of a peripheral.
+    //
+    // Each step is bound with its type written out because a call into
+    // another module does not have its return type inferred in a
+    // single-file build.  Inside a package built as one unit — which is
+    // what every host suite does — none of these annotations is needed.
+    let rxdrdy = bfflags.mask(0)
+    let txdrdy = bfflags.mask(1)
+    let error = bfflags.mask(2)
+
+    var pending: BfFlags = bfflags.of(8, 5)
+    if bfflags.intersects(pending, error)
+        hal.uart.write("!")
+    pending = bfflags.remove(pending, rxdrdy)
+    pending = bfflags.insert(pending, txdrdy)
+    pending = bfflags.toggle(pending, error)
+    pending = bfflags.put(pending, rxdrdy, true)
+
+    // The dispatcher's loop: take the lowest pending source, service
+    // it, drop it.  Bounded by the width, so the tier's refusal of an
+    // unbounded `while` is satisfied by construction.
+    for _i in 0..8
+        let lowest = bfflags.lowest(pending)
+        if lowest < 0
+            break
+        pending = bfflags.remove(pending, bfflags.mask(lowest))
+        hal.uart.write(".")
+
+    let leftover: BfFlags = bfflags.complement(bfflags.empty(8))
+    let both: BfFlags = bfflags.union(pending, leftover)
+    let shared: BfFlags = bfflags.intersection(pending, leftover)
+    let gone: BfFlags = bfflags.difference(leftover, pending)
+    let changed: BfFlags = bfflags.symmetric_difference(pending, leftover)
+    if bfflags.is_empty(shared) or bfflags.is_all(both)
+        hal.uart.write(",")
+    let n = bfflags.count(changed) + bfflags.highest(gone)
+    let w = bfflags.width_mask(8)
+    if bfflags.contains(both, w) and bfflags.test(both, 0)
+        hal.uart.write(";")
+
+    // A field described once and used four ways — the nRF52 UART's
+    // CONFIG register, which is one enable bit and a three-bit parity
+    // selector in a thirty-two-bit word.
+    let hwfc: BfField = bffield.field(0, 1)
+    let parity: BfField = bffield.field(1, 3)
+    let trim: BfField = bffield.signed_field(4, 6)
+
+    let m = bffield.mask(parity)
+    let e = bffield.end_bit(parity)
+    let hi = bffield.field_max(trim)
+    let lo = bffield.field_min(trim)
+    if bffield.fits(parity, 7) and bffield.fits_in(parity, 32)
+        hal.uart.write(":")
+
+    let word = bffield.insert(parity, bffield.insert(hwfc, 0, 1), 7)
+    let got = bffield.extract(parity, word)
+    let bare = bffield.clear(parity, word)
+
+    // The four typed widths, so a caller that has the register's width
+    // in the type compiles the same arithmetic the generic form does.
+    let b8: u8 = bffield.insert_u8(hwfc, 0 as u8, 1)
+    let v8 = bffield.extract_u8(hwfc, b8)
+    let b16: u16 = bffield.insert_u16(parity, 0 as u16, 5)
+    let v16 = bffield.extract_u16(parity, b16)
+    let b32: u32 = bffield.insert_u32(parity, 0 as u32, 5)
+    let v32 = bffield.extract_u32(parity, b32)
+    let b64: u64 = bffield.insert_u64(trim, 0 as u64, 3)
+    let v64 = bffield.extract_u64(trim, b64)
+
+    // The register, built by chaining — the read-modify-write sequence
+    // a driver writes by hand, with the shifts named.
+    var cfg: BfReg = bfreg.zeroed(32)
+    cfg = bfreg.with(cfg, hwfc, 1)
+    cfg = bfreg.with(cfg, parity, 7)
+    cfg = bfreg.without(cfg, trim)
+    cfg = bfreg.set_mask(cfg, 0x80)
+    cfg = bfreg.clear_mask(cfg, 0x80)
+    if bfreg.accepts(cfg, parity, 7)
+        hal.uart.write("-")
+
+    let read_back: BfReg = bfreg.of(32, cfg.word)
+    let p = bfreg.get(read_back, parity)
+    let rest = bfreg.residue(read_back, bffield.mask(hwfc) | m)
+
+    // The read forces the arithmetic to be compiled rather than folded
+    // away; a real driver would hand `cfg.word` to a `hal` write.
+    if p + rest + got + bare + v8 + v16 + v32 + v64 + n + hi + lo + e >= 0
+        hal.uart.write("+")
+
+    hal.uart.write("bitfield-nv: a field described once\n")

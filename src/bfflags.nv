@@ -1,0 +1,264 @@
+// bfflags — a set of named bits over an unsigned word, as arithmetic
+// that allocates nothing and builds for a microcontroller.
+//
+// Every body is a `todo()`.  The signatures are the design, and the
+// compiler checks them as claims; see the README for the stamp.
+//
+// WHAT IT IS.  `bitflags` in Rust generates a struct per flag set with
+// the set algebra on it.  There is no macro here and a `@value` struct
+// takes no type parameter, so the flag set is ONE type carrying the
+// word and the width, and the flag constants are the caller's — an
+// `Int` per flag, or a `mask(i)` call.  What this module owns is the
+// algebra, the width masking and the two-argument tests, which is the
+// part every hand-rolled flag word gets subtly wrong.
+//
+// WHY THE WIDTH IS A FIELD.  `Int` is 64 bits, a status word is 8, 16
+// or 32, and `complement` is the operation where that difference shows:
+// `~0` over an 8-bit word is `0xFF`, not `-1`.  A flag set that did not
+// carry its width would answer 56 set bits nobody asked for, so the
+// width rides on the value and every operation masks to it.
+//
+// WHY IT IS NOT `std.bits`.  `bits.*` is seven operators and eleven
+// functions over a bare `Int`: they are the instructions, and this is
+// the value that knows how wide it is.  Everything here lowers to those
+// instructions; what it adds is the mask, the width and the names.
+
+// A set of bits over an unsigned word of a known width.
+//
+// A `@value` struct, so it lives in the caller's stack frame with no
+// header, no reference count and no allocation — a driver that keeps
+// an interrupt mask in a field keeps two integers, not a pointer.
+//
+// `bits` is always already masked to `width`: every constructor and
+// every operation masks on the way out, so a caller may read the field
+// directly and never see a bit above the word.
+pub @value
+struct BfFlags
+    bits: Int
+    width: Int
+
+// An empty flag set over a `width`-bit word.
+//
+// `width` is 1 through 64.  The two callers this is for are a driver
+// building an interrupt mask bit by bit and a test asserting that a
+// sequence of operations lands back on empty.
+//
+// ```novo
+// use bfflags
+//
+// fn main() [io]
+//     println("${bfflags.empty(8).bits}")   // 0
+// ```
+pub fn empty(width: Int) -> BfFlags
+    todo("bfflags.empty")
+
+// The flag set with every bit of a `width`-bit word set.
+//
+// `all(8).bits` is 255 and `all(32).bits` is 4294967295 — the reason
+// the width is a field rather than a convention.
+pub fn all(width: Int) -> BfFlags
+    todo("bfflags.all")
+
+// A flag set over a `width`-bit word holding `bits`, masked to the
+// width.
+//
+// The constructor for a word that came off a peripheral: the bits above
+// the width are dropped rather than carried, because a status register
+// read into an `Int` is sign-extended by nothing and zero-extended by
+// everything, and neither answer is the register's.
+//
+// ```novo
+// use bfflags
+//
+// fn main() [io]
+//     println("${bfflags.of(8, 511).bits}")   // 255 — the ninth bit is not in an 8-bit word
+// ```
+pub fn of(width: Int, bits: Int) -> BfFlags
+    todo("bfflags.of")
+
+// The flag set holding only bit `i`, over a `width`-bit word.
+//
+// `i` is `0 ..= width - 1`; a bit outside the word answers the empty
+// set rather than a value the caller would have to check, because the
+// caller that got the index wrong wants an OR that changes nothing
+// rather than a panic inside an interrupt handler.
+pub fn bit(width: Int, i: Int) -> BfFlags
+    todo("bfflags.bit")
+
+// The mask for bit `i`: `1 << i`, or 0 for an `i` outside `0 ..= 63`.
+//
+// The one function here that answers a bare `Int`, because a flag
+// constant is a bare `Int`: a driver writes
+// `let RX_READY = bfflags.mask(2)` once at the top of a module and
+// passes it to `insert`, `remove` and `contains` for the rest of its
+// life.
+//
+// ```novo
+// use bfflags
+//
+// fn main() [io]
+//     println("${bfflags.mask(2)}")   // 4
+// ```
+pub fn mask(i: Int) -> Int
+    todo("bfflags.mask")
+
+// The mask of every bit in a `width`-bit word.
+//
+// `width_mask(8)` is 255 and `width_mask(64)` is -1, which is the whole
+// `Int` and the one case where the shift that would compute it
+// overflows.  A caller masking a register value by hand wants this
+// rather than `(1 << width) - 1`.
+pub fn width_mask(width: Int) -> Int
+    todo("bfflags.width_mask")
+
+// The set with the bits of `m` added.
+//
+// `bitflags`'s `insert`.  `m` is a raw mask rather than a `BfFlags`, so
+// the flag constants a driver declares stay bare integers and the OR of
+// two of them is an OR.
+//
+// ```novo
+// use bfflags
+//
+// fn main() [io]
+//     let f = bfflags.insert(bfflags.empty(8), bfflags.mask(0) | bfflags.mask(3))
+//     println("${f.bits}")   // 9
+// ```
+pub fn insert(f: BfFlags, m: Int) -> BfFlags
+    todo("bfflags.insert")
+
+// The set with the bits of `m` taken out.
+//
+// `bitflags`'s `remove`.  Bits of `m` that were not in the set are not
+// an error — removing what is not there is the set operation, not a
+// mistake.
+pub fn remove(f: BfFlags, m: Int) -> BfFlags
+    todo("bfflags.remove")
+
+// The set with the bits of `m` flipped.
+//
+// `bitflags`'s `toggle`.  The operation a status bit that is cleared by
+// writing a one needs, and the reason this is not just `insert` and
+// `remove`.
+pub fn toggle(f: BfFlags, m: Int) -> BfFlags
+    todo("bfflags.toggle")
+
+// The set with the bits of `m` set when `on`, and cleared when not.
+//
+// `bitflags`'s `set`.  The form a configuration routine wants: one call
+// per flag with the `Bool` the caller already has, rather than a branch
+// around `insert` and `remove`.
+pub fn put(f: BfFlags, m: Int, on: Bool) -> BfFlags
+    todo("bfflags.put")
+
+// True when EVERY bit of `m` is in the set.
+//
+// `bitflags`'s `contains`, and the test a caller almost always means:
+// "is this combination present".  An empty `m` is contained by every
+// set, which is the set-theoretic answer and the one that makes a
+// folded test over zero flags come out true.
+//
+// ```novo
+// use bfflags
+//
+// fn main() [io]
+//     let f = bfflags.of(8, 9)
+//     println("${bfflags.contains(f, 9)} ${bfflags.contains(f, 11)}")   // true false
+// ```
+pub fn contains(f: BfFlags, m: Int) -> Bool
+    todo("bfflags.contains")
+
+// True when ANY bit of `m` is in the set.
+//
+// `bitflags`'s `intersects`.  The other half of the pair, and the one a
+// pending-interrupt check wants: "did any of the sources I care about
+// fire".  An empty `m` intersects nothing, which is the mirror of
+// `contains`'s empty case rather than a contradiction of it.
+pub fn intersects(f: BfFlags, m: Int) -> Bool
+    todo("bfflags.intersects")
+
+// True when bit `i` is in the set.
+//
+// The single-bit form, so a caller reading one status bit does not
+// write `contains(f, mask(i))`.
+pub fn test(f: BfFlags, i: Int) -> Bool
+    todo("bfflags.test")
+
+// Both sets' bits.
+//
+// `a | b`, masked to `a`'s width.  The two widths are not checked
+// against each other and the answer takes `a`'s: a flag set is a value
+// and the left operand is the one being extended, which is the same
+// rule `of` follows for a word that is too wide.
+pub fn union(a: BfFlags, b: BfFlags) -> BfFlags
+    todo("bfflags.union")
+
+// The bits in both sets.
+//
+// `a & b`, masked to `a`'s width.
+pub fn intersection(a: BfFlags, b: BfFlags) -> BfFlags
+    todo("bfflags.intersection")
+
+// The bits in `a` that are not in `b`.
+//
+// `a & ~b`, masked to `a`'s width — what a driver clearing the sources
+// it has already serviced computes.
+pub fn difference(a: BfFlags, b: BfFlags) -> BfFlags
+    todo("bfflags.difference")
+
+// The bits in exactly one of the two sets.
+//
+// `a ^ b`, masked to `a`'s width.  What "which bits changed between two
+// reads of this status register" is.
+pub fn symmetric_difference(a: BfFlags, b: BfFlags) -> BfFlags
+    todo("bfflags.symmetric_difference")
+
+// Every bit of the word that is not in the set.
+//
+// `~bits` masked to the width, which is the operation the width exists
+// for: over an 8-bit word the complement of the empty set is 255, and
+// over a bare `Int` it would be -1.
+//
+// ```novo
+// use bfflags
+//
+// fn main() [io]
+//     println("${bfflags.complement(bfflags.empty(8)).bits}")   // 255
+// ```
+pub fn complement(f: BfFlags) -> BfFlags
+    todo("bfflags.complement")
+
+// True when no bit is set.
+pub fn is_empty(f: BfFlags) -> Bool
+    todo("bfflags.is_empty")
+
+// True when every bit of the word is set.
+pub fn is_all(f: BfFlags) -> Bool
+    todo("bfflags.is_all")
+
+// How many bits are set.
+//
+// A popcount over the masked word, so the bits above the width never
+// reach the count.
+pub fn count(f: BfFlags) -> Int
+    todo("bfflags.count")
+
+// The index of the lowest set bit, or -1 for an empty set.
+//
+// What an interrupt dispatcher calls in a loop: take the lowest pending
+// source, service it, `remove` it, go round again.  -1 rather than an
+// optional because a `@value` module answers integers — the loop's exit
+// test is `< 0`, which is one comparison in the same register.
+//
+// ```novo
+// use bfflags
+//
+// fn main() [io]
+//     println("${bfflags.lowest(bfflags.of(8, 12))}")   // 2
+// ```
+pub fn lowest(f: BfFlags) -> Int
+    todo("bfflags.lowest")
+
+// The index of the highest set bit, or -1 for an empty set.
+pub fn highest(f: BfFlags) -> Int
+    todo("bfflags.highest")

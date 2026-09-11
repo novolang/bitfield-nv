@@ -1,0 +1,145 @@
+// bfreg — a register's value under construction: the word, its width,
+// and read-modify-write as arithmetic on it.
+//
+// Every body is a `todo()`.  The signatures are the design, and the
+// compiler checks them as claims; see the README for the stamp.
+//
+// WHAT IT IS, AND WHAT IT IS NOT.  `BfReg` is a WORD, not a peripheral:
+// it holds the bits a register does and nothing that knows an address.
+// A driver reads the register through `hal`, wraps the word here,
+// chains `with` once per field, and writes `word` back — so the
+// read-modify-write sequence every peripheral driver writes by hand
+// becomes one expression, and the two memory accesses stay in exactly
+// the two places that are allowed to perform them.
+//
+// WHY THERE IS NO LIST OF FIELDS ON THIS SIDE.  The plan's row asks for
+// "a register description as a list of fields", and a `@value` struct
+// cannot own one: it has no type parameter, it may not hold a
+// fixed-capacity buffer, and an owned list would be copied whole on
+// every assignment (SPEC § 14.3).  So the list lives in `bitfield`,
+// host-side, as `BfRegDesc` — where it can be printed, validated and
+// parsed — and the device side is the word plus a chain of `with`
+// calls, which is the same sequence a driver would have written anyway
+// with the shifts spelled out.  The README says so where a reader will
+// look for it.
+//
+// THE RESET VALUE IS NOT HERE EITHER, for the same reason and one more:
+// a reset value belongs to a register, a `BfReg` is a word, and two
+// words of the same width are the same type.  `bitfield.BfRegDesc`
+// carries it.
+
+// A register's value, mid-modification: the bits and how many of them
+// there are.
+//
+// A `@value` struct — two integers in the caller's frame, no header and
+// no allocation.  `word` is always already masked to `width`, so a
+// caller may hand it straight to a `hal` write.
+pub @value
+struct BfReg
+    word: Int
+    width: Int
+
+// A `width`-bit register holding `word`.
+//
+// `width` is 8, 16, 32 or 64 in practice and 1 through 64 in fact.
+// `word` is masked to the width on the way in, because a `hal` read
+// answers an `Int` and the bits above the register are whatever the
+// bus put there.
+//
+// ```novo
+// use bfreg
+//
+// fn main() [io]
+//     println("${bfreg.of(8, 0x1FF).word}")   // 255
+// ```
+pub fn of(width: Int, word: Int) -> BfReg
+    todo("bfreg.of")
+
+// A `width`-bit register holding zero.
+//
+// What a driver writing a configuration word from scratch starts from —
+// the case where the register is write-only and there is nothing to
+// read back.
+pub fn zeroed(width: Int) -> BfReg
+    todo("bfreg.zeroed")
+
+// The register with field `f` set to `v`.
+//
+// The read-modify-write, as a pure function: clear `f`'s bits, mask `v`
+// to `f`'s width, shift it into place, OR, and mask the result to the
+// register's width.  Every other bit comes back untouched, which is
+// what makes a chain of these the configuration word.
+//
+// A field that does not fit the register's width changes nothing.
+// `bffield.fits_in` is the check, and `bitfield.validate` makes it once
+// for a whole description rather than on every write.
+//
+// ```novo
+// use bffield
+// use bfreg
+//
+// fn main() [io]
+//     let hwfc = bffield.field(0, 1)
+//     let parity = bffield.field(1, 3)
+//     let r = bfreg.with(bfreg.with(bfreg.zeroed(32), hwfc, 1), parity, 7)
+//     println("${r.word}")   // 15
+// ```
+pub fn with(r: BfReg, f: BfField, v: Int) -> BfReg
+    todo("bfreg.with")
+
+// Field `f`'s value, read out of the register.
+//
+// `bffield.extract` over the register's word, so a signed field comes
+// back sign-extended and a field outside the register's width comes
+// back zero.
+//
+// ```novo
+// use bffield
+// use bfreg
+//
+// fn main() [io]
+//     println("${bfreg.get(bfreg.of(32, 0x0A00), bffield.field(8, 4))}")   // 10
+// ```
+pub fn get(r: BfReg, f: BfField) -> Int
+    todo("bfreg.get")
+
+// The register with every bit of field `f` cleared.
+//
+// The operation a write-one-to-clear status register wants named, so a
+// driver does not write `with(r, f, 0)` and wonder later whether zero
+// meant "clear" or "the value zero".
+pub fn without(r: BfReg, f: BfField) -> BfReg
+    todo("bfreg.without")
+
+// The register with the bits of `m` set, `m` taken as already in place.
+//
+// The escape hatch for the bits a description does not name — a
+// reserved bit a datasheet says to write as one, or a whole-word
+// constant from a vendor header — without leaving this value and
+// coming back.
+pub fn set_mask(r: BfReg, m: Int) -> BfReg
+    todo("bfreg.set_mask")
+
+// The register with the bits of `m` cleared.
+pub fn clear_mask(r: BfReg, m: Int) -> BfReg
+    todo("bfreg.clear_mask")
+
+// True when field `f` is entirely inside the register's width AND `v`
+// fits the field.
+//
+// The whole of what `with` silently tolerates, in one test — a driver
+// that checks this once at start-up per (field, value) it will ever
+// write never needs to check again, which is the point of describing a
+// register instead of shifting by hand.
+pub fn accepts(r: BfReg, f: BfField, v: Int) -> Bool
+    todo("bfreg.accepts")
+
+// The bits of the register that no field in the caller's description
+// covers, given the union of those fields' masks.
+//
+// `word & ~covered`.  What a driver prints when a register reads back
+// something a datasheet does not explain, and what a conformance test
+// asserts is zero.  The union itself is the caller's fold over
+// `bffield.mask`, or `bitfield.covered_mask` for a whole description.
+pub fn residue(r: BfReg, covered: Int) -> Int
+    todo("bfreg.residue")

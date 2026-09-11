@@ -1,0 +1,406 @@
+// tests/bitfield_tests.nv — the API tests, written against the
+// signatures.
+//
+// They COMPILE today and they FAIL at run, with `not implemented:
+// <module>.<fn>` from the `todo()` that is each body.  That is the
+// expected state of an interface release: the compiler has checked
+// every signature, every type and every effect row, and nothing else
+// has been checked because there is nothing else yet.
+//
+// WHERE THE VECTORS COME FROM.  `bitflags`'s own documented semantics
+// for the set algebra — `insert`, `remove`, `toggle`, `contains`,
+// `intersects` and the four set operations — and the nRF52840 Product
+// Specification for the register layouts, which are the descriptions
+// `orbit/hal` and `orbit/bsp` write by hand today.  A test that passes
+// here is a driver that programs the same bits the datasheet names.
+
+use std.test
+use bfflags
+use bffield
+use bfreg
+use bitfield
+
+// ── The flag algebra, as bitflags defines it ────────────────────────
+
+@test
+fn test_an_empty_set_over_an_eight_bit_word_is_zero_and_its_complement_is_255()
+    // The width is a field for exactly this: `~0` over an 8-bit word is
+    // 255, and over a bare `Int` it is -1.
+    test.assert_eq(bfflags.empty(8).bits, 0)
+    test.assert_eq(bfflags.complement(bfflags.empty(8)).bits, 255)
+    test.assert_eq(bfflags.all(8).bits, 255)
+    test.assert_eq(bfflags.all(32).bits, 4294967295)
+
+@test
+fn test_a_word_wider_than_the_set_is_masked_on_the_way_in()
+    test.assert_eq(bfflags.of(8, 511).bits, 255)
+    test.assert_eq(bfflags.of(8, 255).bits, 255)
+    test.assert_eq(bfflags.of(16, 511).bits, 511)
+
+@test
+fn test_insert_remove_and_toggle_are_bitflags_own_three()
+    let a = bfflags.mask(0)
+    let b = bfflags.mask(3)
+    let f = bfflags.insert(bfflags.insert(bfflags.empty(8), a), b)
+    test.assert_eq(f.bits, 9)
+    test.assert_eq(bfflags.remove(f, a).bits, 8)
+    test.assert_eq(bfflags.toggle(f, a | b).bits, 0)
+    test.assert_eq(bfflags.toggle(bfflags.empty(8), a).bits, 1)
+
+@test
+fn test_put_is_the_branch_a_configuration_routine_would_have_written()
+    let m = bfflags.mask(2)
+    test.assert_eq(bfflags.put(bfflags.empty(8), m, true).bits, 4)
+    test.assert_eq(bfflags.put(bfflags.of(8, 4), m, false).bits, 0)
+
+@test
+fn test_contains_is_all_of_the_mask_and_intersects_is_any_of_it()
+    let f = bfflags.of(8, 9)
+    test.assert_eq(bfflags.contains(f, 9), true)
+    test.assert_eq(bfflags.contains(f, 11), false)
+    test.assert_eq(bfflags.intersects(f, 11), true)
+    test.assert_eq(bfflags.intersects(f, 6), false)
+    // The empty mask: contained by everything, intersecting nothing.
+    // The set-theoretic answers, and the ones that make a fold over
+    // zero flags come out right.
+    test.assert_eq(bfflags.contains(f, 0), true)
+    test.assert_eq(bfflags.intersects(f, 0), false)
+
+@test
+fn test_the_four_set_operations()
+    let a = bfflags.of(8, 0b1100)
+    let b = bfflags.of(8, 0b1010)
+    test.assert_eq(bfflags.union(a, b).bits, 0b1110)
+    test.assert_eq(bfflags.intersection(a, b).bits, 0b1000)
+    test.assert_eq(bfflags.difference(a, b).bits, 0b0100)
+    test.assert_eq(bfflags.symmetric_difference(a, b).bits, 0b0110)
+
+@test
+fn test_the_dispatcher_loop_takes_the_lowest_pending_source()
+    // What an interrupt handler does: lowest set bit, service, remove,
+    // round again — and -1 when there is nothing left.
+    let f = bfflags.of(8, 0b1100)
+    test.assert_eq(bfflags.lowest(f), 2)
+    test.assert_eq(bfflags.highest(f), 3)
+    test.assert_eq(bfflags.count(f), 2)
+    test.assert_eq(bfflags.lowest(bfflags.empty(8)), -1)
+    test.assert_eq(bfflags.highest(bfflags.empty(8)), -1)
+
+@test
+fn test_is_empty_and_is_all_read_the_masked_word()
+    test.assert_eq(bfflags.is_empty(bfflags.empty(8)), true)
+    test.assert_eq(bfflags.is_all(bfflags.of(8, 255)), true)
+    test.assert_eq(bfflags.is_all(bfflags.of(16, 255)), false)
+
+@test
+fn test_the_two_masks()
+    test.assert_eq(bfflags.mask(0), 1)
+    test.assert_eq(bfflags.mask(2), 4)
+    test.assert_eq(bfflags.width_mask(8), 255)
+    test.assert_eq(bfflags.width_mask(12), 4095)
+    // 64 is the width where `(1 << width) - 1` overflows, and the
+    // answer is the whole `Int`.
+    test.assert_eq(bfflags.width_mask(64), -1)
+
+@test
+fn test_test_reads_one_bit_by_index()
+    let f = bfflags.of(8, 0b0101)
+    test.assert_eq(bfflags.test(f, 0), true)
+    test.assert_eq(bfflags.test(f, 1), false)
+    test.assert_eq(bfflags.test(f, 2), true)
+
+// ── A field, described once ─────────────────────────────────────────
+
+@test
+fn test_a_field_is_an_offset_a_width_and_a_mask()
+    let prescaler = bffield.field(8, 4)
+    test.assert_eq(prescaler.offset, 8)
+    test.assert_eq(prescaler.width, 4)
+    test.assert_eq(bffield.mask(prescaler), 0xF00)
+    test.assert_eq(bffield.end_bit(prescaler), 12)
+    test.assert_eq(bffield.field_max(prescaler), 15)
+    test.assert_eq(bffield.field_min(prescaler), 0)
+
+@test
+fn test_extract_and_insert_are_each_other_s_inverse()
+    let f = bffield.field(8, 4)
+    test.assert_eq(bffield.extract(f, 0x0A00), 10)
+    test.assert_eq(bffield.insert(f, 0x0A05, 3), 0x0305)
+    test.assert_eq(bffield.extract(f, bffield.insert(f, 0, 13)), 13)
+    // Everything outside the field comes back untouched, which is what
+    // makes a chain of inserts a configuration word.
+    test.assert_eq(bffield.insert(f, 0xFFFF, 0), 0xF0FF)
+    test.assert_eq(bffield.clear(f, 0xFFFF), 0xF0FF)
+
+@test
+fn test_a_signed_field_sign_extends_its_top_bit()
+    // A six-bit trim at bit 4 holding 0b111111 is -1, not 63 — the case
+    // a hand-written driver reads as 63 and never finds out.
+    let trim = bffield.signed_field(4, 6)
+    test.assert_eq(bffield.extract(trim, 0x3F0), -1)
+    test.assert_eq(bffield.extract(trim, 0x200), -32)
+    test.assert_eq(bffield.extract(trim, 0x1F0), 31)
+    test.assert_eq(bffield.field_max(trim), 31)
+    test.assert_eq(bffield.field_min(trim), -32)
+
+@test
+fn test_fits_is_the_check_that_insert_does_not_make()
+    let f = bffield.field(8, 4)
+    test.assert_eq(bffield.fits(f, 15), true)
+    test.assert_eq(bffield.fits(f, 16), false)
+    test.assert_eq(bffield.fits_in(f, 32), true)
+    test.assert_eq(bffield.fits_in(f, 8), false)
+    // `insert` masks rather than refusing, so 16 into a four-bit field
+    // is 0 — which is why `fits` exists and why the host half calls it.
+    test.assert_eq(bffield.extract(f, bffield.insert(f, 0, 16)), 0)
+
+@test
+fn test_a_field_outside_the_word_reads_zero_and_writes_nothing()
+    let f = bffield.field(8, 4)
+    test.assert_eq(bffield.extract_u8(f, 255 as u8), 0)
+    test.assert_eq(bffield.insert_u8(f, 255 as u8, 3), 255 as u8)
+
+@test
+fn test_the_four_typed_widths_compute_what_the_generic_form_does()
+    let nibble = bffield.field(4, 4)
+    test.assert_eq(bffield.extract_u8(nibble, 0xA5 as u8), 10)
+    test.assert_eq(bffield.insert_u8(nibble, 0x05 as u8, 10), 0xA5 as u8)
+    test.assert_eq(bffield.extract_u16(nibble, 0x00A5 as u16), 10)
+    test.assert_eq(bffield.insert_u16(nibble, 0x0005 as u16, 10), 0x00A5 as u16)
+    test.assert_eq(bffield.extract_u32(nibble, 0x000000A5 as u32), 10)
+    test.assert_eq(bffield.insert_u32(nibble, 0x00000005 as u32, 10), 0x000000A5 as u32)
+    test.assert_eq(bffield.extract_u64(nibble, 0xA5 as u64), 10)
+    test.assert_eq(bffield.insert_u64(nibble, 0x05 as u64, 10), 0xA5 as u64)
+
+// ── A register, as read-modify-write on a word ──────────────────────
+
+@test
+fn test_a_register_masks_the_word_to_its_width()
+    test.assert_eq(bfreg.of(8, 0x1FF).word, 255)
+    test.assert_eq(bfreg.of(8, 0x1FF).width, 8)
+    test.assert_eq(bfreg.zeroed(32).word, 0)
+
+@test
+fn test_chaining_with_is_the_configuration_word()
+    // nRF52840 UART CONFIG: HWFC at bit 0, PARITY at bits 1..3
+    // (Product Specification § UARTE, CONFIG).
+    let hwfc = bffield.field(0, 1)
+    let parity = bffield.field(1, 3)
+    let r = bfreg.with(bfreg.with(bfreg.zeroed(32), hwfc, 1), parity, 7)
+    test.assert_eq(r.word, 15)
+    test.assert_eq(bfreg.get(r, hwfc), 1)
+    test.assert_eq(bfreg.get(r, parity), 7)
+    test.assert_eq(bfreg.without(r, parity).word, 1)
+
+@test
+fn test_set_mask_and_clear_mask_reach_the_bits_no_field_names()
+    let r = bfreg.of(32, 0)
+    test.assert_eq(bfreg.set_mask(r, 0x80).word, 0x80)
+    test.assert_eq(bfreg.clear_mask(bfreg.of(32, 0xFF), 0x80).word, 0x7F)
+
+@test
+fn test_accepts_is_the_whole_of_what_with_tolerates()
+    let r = bfreg.of(8, 0)
+    let parity = bffield.field(1, 3)
+    let past_end = bffield.field(6, 4)
+    test.assert_eq(bfreg.accepts(r, parity, 7), true)
+    test.assert_eq(bfreg.accepts(r, parity, 8), false)
+    test.assert_eq(bfreg.accepts(r, past_end, 0), false)
+
+@test
+fn test_residue_is_the_bits_no_field_explains()
+    let r = bfreg.of(32, 0xF3)
+    let covered = bffield.mask(bffield.field(0, 4))
+    test.assert_eq(bfreg.residue(r, covered), 0xF0)
+
+// ── The names on top ────────────────────────────────────────────────
+
+@test
+fn test_a_description_is_validated_once_and_answers_how_much_it_covers()
+    let d = bitfield.reg_desc("CONFIG", 32, 0, [
+        bitfield.field_desc("HWFC", bffield.field(0, 1)),
+        bitfield.field_desc("PARITY", bffield.field(1, 3))])
+    match bitfield.validate(d)
+        Ok(n)  => test.assert_eq(n, 4)
+        Err(e) => test.fail(e.message())
+    test.assert_eq(bitfield.covered_mask(d), 0xF)
+
+@test
+fn test_two_fields_on_one_bit_are_refused_by_name()
+    // The mistake this package exists to catch: an off-by-one offset in
+    // a hand-written driver writes one field and clobbers another, and
+    // nothing fails until a peripheral misbehaves months later.
+    let d = bitfield.reg_desc("CONFIG", 32, 0, [
+        bitfield.field_desc("HWFC", bffield.field(0, 2)),
+        bitfield.field_desc("PARITY", bffield.field(1, 3))])
+    match bitfield.validate(d)
+        Ok(_)  => test.fail("HWFC and PARITY both claim bit 1")
+        Err(e) =>
+            match e
+                BfFieldsOverlap(first, second, at) =>
+                    test.assert_eq(first, "HWFC")
+                    test.assert_eq(second, "PARITY")
+                    test.assert_eq(at, 1)
+                _                                  => test.fail("expected BfFieldsOverlap: ${e.message()}")
+
+@test
+fn test_a_field_past_the_register_s_end_is_refused_by_name()
+    let d = bitfield.reg_desc("STATUS", 8, 0, [
+        bitfield.field_desc("SRC", bffield.field(6, 4))])
+    match bitfield.validate(d)
+        Ok(_)  => test.fail("SRC ends at bit 10 of an 8-bit register")
+        Err(e) =>
+            match e
+                BfFieldPastEnd(name, endb, word_width) =>
+                    test.assert_eq(name, "SRC")
+                    test.assert_eq(endb, 10)
+                    test.assert_eq(word_width, 8)
+                _                                      => test.fail("expected BfFieldPastEnd: ${e.message()}")
+
+@test
+fn test_desc_field_crosses_from_the_names_back_to_the_arithmetic()
+    let fd = bitfield.field_desc("PARITY", bffield.field(1, 3))
+    test.assert_eq(bitfield.desc_field(fd).offset, 1)
+    test.assert_eq(bitfield.desc_field(fd).width, 3)
+    test.assert_eq(bitfield.desc_field(fd).signed, false)
+
+@test
+fn test_read_all_and_write_all_are_the_whole_register_in_one_call()
+    let d = bitfield.reg_desc("CONFIG", 32, 0, [
+        bitfield.field_desc("HWFC", bffield.field(0, 1)),
+        bitfield.field_desc("PARITY", bffield.field(1, 3))])
+    test.assert_eq(bitfield.read_all(d, 15), [1, 7])
+    match bitfield.write_all(d, 0, [1, 7])
+        Ok(w)  => test.assert_eq(w, 15)
+        Err(e) => test.fail(e.message())
+
+@test
+fn test_write_all_checks_the_range_where_bfreg_with_masks()
+    let d = bitfield.reg_desc("CONFIG", 32, 0, [
+        bitfield.field_desc("PARITY", bffield.field(1, 3))])
+    match bitfield.write_all(d, 0, [8])
+        Ok(_)  => test.fail("8 does not fit a three-bit field")
+        Err(e) =>
+            match e
+                BfValueOutOfRange(name, value, lo, hi) =>
+                    test.assert_eq(name, "PARITY")
+                    test.assert_eq(value, 8)
+                    test.assert_eq(lo, 0)
+                    test.assert_eq(hi, 7)
+                _                                      => test.fail("expected BfValueOutOfRange: ${e.message()}")
+
+@test
+fn test_write_all_refuses_the_wrong_number_of_values()
+    let d = bitfield.reg_desc("CONFIG", 32, 0, [
+        bitfield.field_desc("HWFC", bffield.field(0, 1)),
+        bitfield.field_desc("PARITY", bffield.field(1, 3))])
+    match bitfield.write_all(d, 0, [1])
+        Ok(_)  => test.fail("two fields, one value")
+        Err(e) =>
+            match e
+                BfFieldCountMismatch(want, got) =>
+                    test.assert_eq(want, 2)
+                    test.assert_eq(got, 1)
+                _                               => test.fail("expected BfFieldCountMismatch: ${e.message()}")
+
+@test
+fn test_reading_and_writing_one_field_by_name()
+    let d = bitfield.reg_desc("CONFIG", 32, 0, [
+        bitfield.field_desc("HWFC", bffield.field(0, 1)),
+        bitfield.field_desc("PARITY", bffield.field(1, 3))])
+    match bitfield.read_named(d, 15, "PARITY")
+        Ok(v)  => test.assert_eq(v, 7)
+        Err(e) => test.fail(e.message())
+    match bitfield.write_named(d, 15, "PARITY", 0)
+        Ok(w)  => test.assert_eq(w, 1)
+        Err(e) => test.fail(e.message())
+    match bitfield.read_named(d, 15, "STOP")
+        Ok(_)  => test.fail("there is no STOP field in this description")
+        Err(e) =>
+            match e
+                BfUnknownFlag(name, _at) => test.assert_eq(name, "STOP")
+                _                        => test.fail("expected BfUnknownFlag: ${e.message()}")
+
+@test
+fn test_a_register_at_its_reset_value_is_one_nobody_configured()
+    let d = bitfield.reg_desc("ENABLE", 32, 0, [
+        bitfield.field_desc("EN", bffield.field(0, 4))])
+    test.assert_eq(bitfield.is_reset(d, 0), true)
+    test.assert_eq(bitfield.is_reset(d, 4), false)
+
+// ── Printing, which is what the names are for ───────────────────────
+
+@test
+fn test_a_register_prints_as_its_fields()
+    let d = bitfield.reg_desc("CONFIG", 32, 0, [
+        bitfield.field_desc("HWFC", bffield.field(0, 1)),
+        bitfield.field_desc("PARITY", bffield.field(1, 3))])
+    test.assert_eq(bitfield.format_reg(d, 15), "CONFIG { HWFC: 1, PARITY: 7 }")
+
+@test
+fn test_an_enumerated_field_prints_the_name_and_the_number()
+    // Both, in that order: the name is what a person reads and the
+    // number is what they will type into a probe.
+    let d = bitfield.reg_desc("ENABLE", 32, 0, [
+        bitfield.enum_desc("EN", bffield.field(0, 4),
+                           [bitfield.value_name(0, "Disabled"),
+                            bitfield.value_name(4, "Enabled")])])
+    test.assert_eq(bitfield.format_reg(d, 4), "ENABLE { EN: Enabled(4) }")
+    // A value the datasheet does not name still prints — a reserved
+    // encoding is a real thing a register can hold.
+    test.assert_eq(bitfield.format_reg(d, 9), "ENABLE { EN: 9 }")
+
+@test
+fn test_format_changes_prints_only_what_left_reset()
+    let d = bitfield.reg_desc("CONFIG", 32, 0, [
+        bitfield.field_desc("HWFC", bffield.field(0, 1)),
+        bitfield.field_desc("PARITY", bffield.field(1, 3))])
+    test.assert_eq(bitfield.format_changes(d, 1), "CONFIG { HWFC: 1 }")
+    test.assert_eq(bitfield.format_changes(d, 0), "CONFIG { }")
+
+@test
+fn test_one_field_prints_on_its_own()
+    let fd = bitfield.field_desc("HWFC", bffield.field(0, 1))
+    test.assert_eq(bitfield.format_field(fd, 1), "HWFC: 1")
+
+// ── Flag names, both directions ─────────────────────────────────────
+
+@test
+fn test_a_flag_set_prints_as_its_names()
+    let t = bitfield.flag_names(8, ["RXDRDY", "TXDRDY", "ERROR"])
+    test.assert_eq(bitfield.format_flags(t, bfflags.of(8, 5)), "RXDRDY | ERROR")
+    test.assert_eq(bitfield.format_flags(t, bfflags.empty(8)), "(none)")
+    test.assert_eq(bitfield.flag_name(t, 1), "TXDRDY")
+    test.assert_eq(bitfield.flag_name(t, 7), "")
+
+@test
+fn test_a_bit_the_table_does_not_name_prints_as_a_hex_mask()
+    // The case a person is staring at the output for: a status word
+    // with an undocumented bit set.
+    let t = bitfield.flag_names(8, ["RXDRDY", "TXDRDY", "ERROR"])
+    test.assert_eq(bitfield.format_flags(t, bfflags.of(8, 0x41)), "RXDRDY | 0x40")
+
+@test
+fn test_the_two_directions_round_trip()
+    let t = bitfield.flag_names(8, ["RXDRDY", "TXDRDY", "ERROR"])
+    match bitfield.parse_flags(t, "RXDRDY | ERROR")
+        Ok(bits) => test.assert_eq(bfflags.of(8, bits).bits, 5)
+        Err(e)   => test.fail(e.message())
+    // The hex spelling `format_flags` prints for an unnamed bit reads
+    // back, which is what makes the pair a round trip rather than two
+    // half-functions.
+    match bitfield.parse_flags(t, "RXDRDY | 0x40")
+        Ok(bits) => test.assert_eq(bits, 0x41)
+        Err(e)   => test.fail(e.message())
+
+@test
+fn test_an_unknown_flag_name_is_refused_with_its_offset()
+    let t = bitfield.flag_names(8, ["RXDRDY", "TXDRDY", "ERROR"])
+    match bitfield.parse_flags(t, "RXDRDY | NOPE")
+        Ok(_)  => test.fail("NOPE is in no table")
+        Err(e) =>
+            match e
+                BfUnknownFlag(name, at) =>
+                    test.assert_eq(name, "NOPE")
+                    test.assert_eq(at, 9)
+                _                       => test.fail("expected BfUnknownFlag: ${e.message()}")

@@ -1,0 +1,242 @@
+// bffield — a field of a register, described once and read and written
+// by that description.
+//
+// Every body is a `todo()`.  The signatures are the design, and the
+// compiler checks them as claims; see the README for the stamp.
+//
+// WHAT A FIELD IS HERE.  Three numbers: where it starts, how wide it
+// is, and whether its value is signed.  That is a DESCRIPTION, not a
+// value — `extract` reads the field out of a word the caller already
+// holds and `insert` puts one back, both as pure functions.  Nothing in
+// this package touches memory: the MMIO read and the MMIO write stay in
+// `hal`, and what a driver gains is that the shift, the mask and the
+// sign extension are written once instead of at every call site.
+//
+// WHY THE WORD WIDTH IS AN ARGUMENT AND NOT A FIELD.  A field
+// description is reused across the registers that share it — the same
+// `PIN_CNF` layout over thirty-two words — so the width belongs to the
+// call, not to the description.  The four `_u8` … `_u64` pairs are that
+// width made a type: a `u16` argument cannot be handed a 32-bit word by
+// accident, and the answer comes back in the word's own type so the
+// caller stores it without a cast.
+//
+// WHY A FIELD OUTSIDE THE WORD IS ZERO AND NOT A PANIC.  A `@value`
+// function has nowhere to put a `Result`, and a driver that got an
+// offset wrong wants a register that reads zero rather than a firmware
+// that traps in an interrupt handler.  `fits_in` is the check, and
+// `bitfield.validate` is where a whole description is checked once at
+// start-up instead of on every access.
+
+// Where a field sits in a word, how wide it is, and how its value is
+// read.
+//
+// A `@value` struct: three integers in the caller's frame, no header
+// and no allocation.  A driver holds one per field as a module-level
+// constant and never allocates to read a register.
+//
+// `offset` is the index of the field's lowest bit, `width` is 1 through
+// 64, and `signed` says whether `extract` sign-extends the top bit.
+pub @value
+struct BfField
+    offset: Int
+    width: Int
+    signed: Bool
+
+// An unsigned field `width` bits wide, starting at bit `offset`.
+//
+// The common case: an enable bit is `field(0, 1)`, a four-bit prescaler
+// at bit 8 is `field(8, 4)`.
+//
+// ```novo
+// use bffield
+//
+// fn main() [io]
+//     let prescaler = bffield.field(8, 4)
+//     println("${prescaler.offset} ${prescaler.width}")   // 8 4
+// ```
+pub fn field(offset: Int, width: Int) -> BfField
+    todo("bffield.field")
+
+// A two's-complement signed field `width` bits wide, starting at bit
+// `offset`.
+//
+// Rarer than the unsigned form and worth its own constructor rather
+// than a `Bool` argument on `field`, because the cases that need it —
+// a temperature trim, a frequency offset, an accelerometer axis — are
+// exactly the ones where a caller who forgot reads 4088 instead of -8
+// and never finds out.
+//
+// ```novo
+// use bffield
+//
+// fn main() [io]
+//     let trim = bffield.signed_field(4, 6)
+//     println("${bffield.extract(trim, 0x3F0)}")   // -1
+// ```
+pub fn signed_field(offset: Int, width: Int) -> BfField
+    todo("bffield.signed_field")
+
+// The mask of the field's bits, in place.
+//
+// `((1 << width) - 1) << offset`.  What a caller writes into a
+// clear-on-write register, and what `insert` clears before it puts a
+// value back.
+//
+// ```novo
+// use bffield
+//
+// fn main() [io]
+//     println("${bffield.mask(bffield.field(8, 4))}")   // 3840
+// ```
+pub fn mask(f: BfField) -> Int
+    todo("bffield.mask")
+
+// The index one past the field's highest bit: `offset + width`.
+//
+// The number two fields are compared on when a description is checked
+// for overlap, and the one a caller compares against the word width.
+pub fn end_bit(f: BfField) -> Int
+    todo("bffield.end_bit")
+
+// The largest value the field can hold.
+//
+// `(1 << width) - 1` unsigned, `(1 << (width - 1)) - 1` signed.
+pub fn field_max(f: BfField) -> Int
+    todo("bffield.field_max")
+
+// The smallest value the field can hold: 0 unsigned,
+// `-(1 << (width - 1))` signed.
+pub fn field_min(f: BfField) -> Int
+    todo("bffield.field_min")
+
+// True when `v` is between `field_min` and `field_max`.
+//
+// The check a caller makes before `insert`, and the one
+// `bitfield.write_all` makes on its behalf.  `insert` itself masks
+// rather than refusing, so a value that does not fit is silently
+// truncated — which is why this function exists and why the host half
+// calls it.
+//
+// ```novo
+// use bffield
+//
+// fn main() [io]
+//     let f = bffield.field(8, 4)
+//     println("${bffield.fits(f, 15)} ${bffield.fits(f, 16)}")   // true false
+// ```
+pub fn fits(f: BfField, v: Int) -> Bool
+    todo("bffield.fits")
+
+// True when the field lies entirely inside a `word_width`-bit word.
+//
+// `end_bit(f) <= word_width`.  A field that does not fit reads zero and
+// writes nothing, so this is the check that turns a silent wrong answer
+// into a refusal the caller can report.
+pub fn fits_in(f: BfField, word_width: Int) -> Bool
+    todo("bffield.fits_in")
+
+// ── The generic form, over an `Int` holding the word ────────────────
+
+// The field's value, read out of `word`.
+//
+// Shift right by `offset`, mask to `width`, and sign-extend when the
+// description says signed.  The word is an `Int` because that is what a
+// `hal` read answers; the four typed forms below are for a caller that
+// has the register's own width in the type.
+//
+// ```novo
+// use bffield
+//
+// fn main() [io]
+//     println("${bffield.extract(bffield.field(8, 4), 0x0A00)}")   // 10
+// ```
+pub fn extract(f: BfField, word: Int) -> Int
+    todo("bffield.extract")
+
+// `word` with the field replaced by `v`.
+//
+// A read-modify-write on a value, which is the whole of what this
+// package does for a register: clear the field's bits, mask `v` to the
+// width, shift it into place, and OR.  Bits outside the field come back
+// untouched, so a caller composing several writes chains the calls.
+//
+// `v` is MASKED, not checked — `fits` is the check, and a `@value`
+// function has nowhere to put a refusal.
+//
+// ```novo
+// use bffield
+//
+// fn main() [io]
+//     println("${bffield.insert(bffield.field(8, 4), 0x0A05, 3)}")   // 773 (0x0305)
+// ```
+pub fn insert(f: BfField, word: Int, v: Int) -> Int
+    todo("bffield.insert")
+
+// `word` with every bit of the field cleared.
+//
+// `word & ~mask(f)`.  The half of `insert` a caller wants on its own
+// when the value comes from somewhere else.
+pub fn clear(f: BfField, word: Int) -> Int
+    todo("bffield.clear")
+
+// ── The typed forms, one per register width ─────────────────────────
+//
+// Four pairs rather than one generic pair, because the width of a
+// register is a fact about the register and a `u16` argument cannot be
+// handed a 32-bit word by mistake.  Each `extract_*` answers an `Int`,
+// because the FIELD's width is not the word's and a four-bit field of a
+// `u32` is not a `u32`; each `insert_*` answers the word's own type, so
+// the caller stores it without a cast.
+//
+// A field that does not fit the word reads 0 and writes the word back
+// unchanged.  `fits_in` is how a caller finds that out.
+
+// The field's value, read out of an 8-bit word.
+//
+// ```novo
+// use bffield
+//
+// fn main() [io]
+//     println("${bffield.extract_u8(bffield.field(4, 4), 0xA5 as u8)}")   // 10
+// ```
+pub fn extract_u8(f: BfField, word: u8) -> Int
+    todo("bffield.extract_u8")
+
+// An 8-bit word with the field replaced by `v`.
+pub fn insert_u8(f: BfField, word: u8, v: Int) -> u8
+    todo("bffield.insert_u8")
+
+// The field's value, read out of a 16-bit word.
+pub fn extract_u16(f: BfField, word: u16) -> Int
+    todo("bffield.extract_u16")
+
+// A 16-bit word with the field replaced by `v`.
+pub fn insert_u16(f: BfField, word: u16, v: Int) -> u16
+    todo("bffield.insert_u16")
+
+// The field's value, read out of a 32-bit word.
+//
+// The one almost every ARM peripheral wants: a Cortex-M register is
+// thirty-two bits, and an `Int` holding one has thirty-two bits of
+// nothing above it that a careless shift would read.
+//
+// ```novo
+// use bffield
+//
+// fn main() [io]
+//     println("${bffield.extract_u32(bffield.field(8, 4), 0x00000A00 as u32)}")   // 10
+// ```
+pub fn extract_u32(f: BfField, word: u32) -> Int
+    todo("bffield.extract_u32")
+
+// A 32-bit word with the field replaced by `v`.
+pub fn insert_u32(f: BfField, word: u32, v: Int) -> u32
+    todo("bffield.insert_u32")
+
+// The field's value, read out of a 64-bit word.
+pub fn extract_u64(f: BfField, word: u64) -> Int
+    todo("bffield.extract_u64")
+
+// A 64-bit word with the field replaced by `v`.
+pub fn insert_u64(f: BfField, word: u64, v: Int) -> u64
+    todo("bffield.insert_u64")
