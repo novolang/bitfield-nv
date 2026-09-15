@@ -4,6 +4,10 @@ Every published version, newest first. This file is on the publish
 allow-list, so it travels with the package: it is the only thing a
 consumer deciding whether to upgrade can read.
 
+## 0.0.2 — 2026-09-15
+
+README rewritten to the package README style guide (docs/writing-a-readme.md); no change to the interface.
+
 ## 0.0.1 — 2026-09-11
 
 The **interface**, before anyone implements it.  Every signature, every
@@ -48,3 +52,36 @@ register description as a list of fields; a `@value` struct cannot own
 one, so the list is host-side in `BfRegDesc` and the device side is the
 word plus a chain of `with` calls — which is the sequence a driver would
 have written anyway, with the shifts named.
+
+### Design notes
+
+The consumers this was drawn from, recorded here because the README no
+longer carries them.  In `orbit/bsp/nordic/nrf52/nrf52840-dk` the
+nRF52840 UART0 block declares five registers as one blob each:
+`CONFIG` is `HWFC:1@0`, `PARITY:3@1`, `STOP:1@4`, `PARITYTYPE:1@8`;
+`ERRORSRC` is four independent flags cleared by writing 15; `ENABLE` is
+an enumeration where 0 is Disabled and 4 is Enabled; `PSEL_*` is
+`PIN:5@0`, `PORT:1@5`, `CONNECT:1@31`; and `BAUDRATE` is an enumeration
+of some twenty constants the driver writes as raw hexadecimal.  The
+GPIO block is the other two shapes: `OUTSET`, `OUTCLR`, `IN`, `DIRSET`
+and `DIRCLR` are one bit per pin, and `PIN_CNF[32]` is `DIR:1@0`,
+`INPUT:1@1`, `PULL:2@2`, `DRIVE:3@8`, `SENSE:2@16`.
+
+`orbit/bsp/raspberrypi/rp2040` has the same three shapes on a different
+chip: `SIO.GPIO_*` one bit per pin, `RESETS.RESET` and `RESET_DONE` a
+flag set with one bit per peripheral block, `IO_BANK0.CTRL[30]` as
+`FUNCSEL:5@0`, `OUTOVER:2@8`, `OEOVER:2@12`, `INOVER:2@16`,
+`IRQOVER:2@28`, and `PADS_BANK0.GPIO[30]` as `SLEWFAST:1@0`,
+`SCHMITT:1@1`, `PDE:1@2`, `PUE:1@3`, `DRIVE:2@4`, `IE:1@6`, `OD:1@7`.
+
+`orbit/hal` carries three enumerations in integer arguments documented
+only in comments: `GpioOut.mode`'s `dir`, `GpioInAsync.wait_for_edge`'s
+`edge`, and `SpiBus.init`'s `mode`.  Those comments are what a
+`BfFieldDesc` with a value enumeration becomes.
+
+The `bsp` / `peripheral` / `register` / `field` block stays as it is.
+It is a compile-time declaration whose offsets are baked into the
+firmware, and it cannot be built at run time, passed to a function,
+printed or validated against a datasheet by a test.  This package is
+the run-time value of the same idea, and nothing here depends on the
+block changing.

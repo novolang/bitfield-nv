@@ -1,6 +1,6 @@
 [package]
 name        = "bitfield-nv"
-version     = "0.0.1"
+version     = "0.0.2"
 description = "Register fields as @value types: a flag set that knows how wide its word is, a field described once as offset, width and signedness and then read and written by that description, and a register as read-modify-write arithmetic on a word.  The MMIO read and write stay in the HAL.  Interface only — every body is a todo()."
 license     = "Apache-2.0"
 
