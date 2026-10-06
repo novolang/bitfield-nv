@@ -67,6 +67,8 @@ novo pkg add bitfield-nv
 
 ## Example
 
+This example compiles; every call in it panics until 0.1.0.
+
 ```novo
 use bffield
 use bfreg
@@ -184,13 +186,17 @@ register write.
 novo build --target=nrf52-qemu tests/embedded_probe.nv
 ```
 
-That command was run against this release. It produces a Cortex-M4
-executable, `embedded_probe.elf`. The probe builds; it is not run, because
-every function it calls is a `todo()` that would panic on the first line.
+The command produces a Cortex-M4 executable, `embedded_probe.elf`. The probe
+builds and is not run, because every function it calls is a `todo()` that
+would panic on the first line.
 
 The `bitfield` module is outside the claim. It speaks `Str` and lists, and
-one host-only function anywhere in a compilation unit is an undefined symbol
-at link time on a device, whether or not the firmware calls it.
+both allocate.
+
+The registry lists all four modules at every tier, the embedded tier
+included. Its tier check admits a module that allocates, because a device
+program has a heap of fixed size. The claim in this section is narrower:
+`bfflags`, `bffield` and `bfreg` allocate nothing at all.
 
 ## What is not included
 
@@ -221,9 +227,9 @@ at link time on a device, whether or not the firmware calls it.
   counts and `bit_len`. Everything here lowers to those. What this package
   adds is a word that knows its own width, a field wider than one bit, sign
   extension, a description that can be checked, and names.
-- [heapless-nv](https://novo-lang.org/packages/heapless-nv) is the
-  fixed-capacity containers for the same device. A driver that needs to hold
-  several register values without an allocator uses its bounded vector.
+- The language's fixed-capacity collections, `Vec[T; N]` and its family
+  (SPEC section 14.8), hold several register values on a device without an
+  allocator. A driver keeps a table of register words in a `Vec[u32; N]`.
 - [can-nv](https://novo-lang.org/packages/can-nv),
   [usb-nv](https://novo-lang.org/packages/usb-nv) and
   [modbus-nv](https://novo-lang.org/packages/modbus-nv) are peripheral and
